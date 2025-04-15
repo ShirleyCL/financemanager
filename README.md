@@ -1,54 +1,22 @@
-# LJL的记账小本本
-
 <!DOCTYPE html>
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>智能购物记录本</title>
-    <!-- 引入Tesseract.js OCR库 -->
-    <script src="https://unpkg.com/tesseract.js@v4.0.2/dist/tesseract.min.js"></script>
+    <script src="https://unpkg.com/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
     <style>
-        /* 响应式布局 */
+        /* 样式保持不变 */
         :root { font-family: -apple-system, sans-serif; }
         .container { padding: 12px; max-width: 600px; margin: 0 auto; }
-        
-        /* 上传按钮样式 */
-        .upload-btn {
-            background: #007AFF;
-            color: white;
-            padding: 12px;
-            border-radius: 8px;
-            text-align: center;
-            margin: 10px 0;
-        }
-        
-        /* 商品列表 */
-        .item-card {
-            border: 1px solid #ddd;
-            padding: 12px;
-            margin: 8px 0;
-            border-radius: 6px;
-        }
-        
-        /* 评价输入 */
-        .comment-input {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            margin-top: 8px;
-        }
-        
-        /* 移动端优化 */
-        @media (max-width: 480px) {
-            .container { padding: 8px; }
-        }
+        .upload-btn { background: #007AFF; color: white; padding: 12px; border-radius: 8px; text-align: center; margin: 10px 0; }
+        .item-card { border: 1px solid #ddd; padding: 12px; margin: 8px 0; border-radius: 6px; }
+        .comment-input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-top: 8px; }
+        @media (max-width: 480px) { .container { padding: 8px; } }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- 首页 -->
         <div id="homeView">
             <input type="file" id="receiptUpload" accept="image/*" hidden>
             <div class="upload-btn" onclick="document.getElementById('receiptUpload').click()">
@@ -63,7 +31,6 @@
             <div id="itemList"></div>
         </div>
 
-        <!-- 详情页模板 -->
         <template id="detailTemplate">
             <div class="item-card">
                 <h3>{{name}}</h3>
@@ -75,31 +42,51 @@
     </div>
 
     <script>
-        // 数据存储结构
-        let receipts = JSON.parse(localStorage.getItem('receipts')) || [];
-        
-        // OCR处理器
-        const worker = Tesseract.createWorker({
-            logger: m => console.log(m)
-        });
-
+        // 修复1: 初始化Worker时添加错误处理
+        let worker;
         (async () => {
-            await worker.load();
-            await worker.loadLanguage('jpn');
-            await worker.initialize('jpn');
+            try {
+                worker = await Tesseract.createWorker({
+                    logger: m => console.log(m),
+                    errorHandler: err => console.error('OCR Error:', err)
+                });
+                await worker.loadLanguage('jpn');
+                await worker.initialize('jpn');
+                console.log('OCR引擎初始化完成');
+            } catch (error) {
+                console.error('OCR初始化失败:', error);
+            }
         })();
 
-        // 图片上传处理
+        // 修复2: 优化数据存储结构
+        let receipts = JSON.parse(localStorage.getItem('receipts') || [];
+        
+        // 修复3: 添加页面渲染锁防止重复渲染
+        let isRendering = false;
+
         document.getElementById('receiptUpload').addEventListener('change', async (e) => {
             const file = e.target.files[0];
-            const { data: { text } } = await worker.recognize(file);
-            const parsedData = parseReceipt(text);
-            receipts.push(parsedData);
-            saveData();
-            renderItems();
+            if (!file || !worker) return;
+            
+            // 添加加载提示
+            const originalBtnText = document.querySelector('.upload-btn').innerHTML;
+            document.querySelector('.upload-btn').innerHTML = '🔄 正在解析...';
+            
+            try {
+                const { data: { text } } = await worker.recognize(file);
+                const parsedData = parseReceipt(text);
+                receipts.push(parsedData);
+                saveData();
+                renderItems();
+            } catch (error) {
+                console.error('OCR处理失败:', error);
+                alert('小票解析失败，请确保图片清晰并包含日文文本');
+            } finally {
+                document.querySelector('.upload-btn').innerHTML = originalBtnText;
+            }
         });
 
-        // 小票解析逻辑
+        // 修复4: 增强小票解析逻辑
         function parseReceipt(text) {
             const lines = text.split('\n');
             let receipt = {
@@ -110,76 +97,91 @@
             };
 
             lines.forEach(line => {
-                // 匹配日期（示例：2025/ 4/13）
-                if (line.match(/\d{4}\/\s?\d{1,2}\/\d{1,2}/)) {
-                    receipt.date = line.replace(/\s/g, '');
+                // 增强日期匹配（处理空格问题）
+                const dateMatch = line.match(/(\d{4})\s*\/\s*(\d{1,2})\s*\/\s*(\d{1,2})/);
+                if (dateMatch) {
+                    receipt.date = `${dateMatch[1]}/${dateMatch[2].padStart(2,'0')}/${dateMatch[3].padStart(2,'0')}`;
                 }
                 
-                // 匹配商品行（示例：雪印 特濃    268※）
-                const itemMatch = line.match(/(.+?)\s+(\d+)\s*[※¥]/);
+                // 增强商品匹配（处理全角字符）
+                const itemMatch = line.match(/([\u3000-¥\w\s]+?)\s+(\d{3,})[※¥]/);
                 if (itemMatch) {
                     receipt.items.push({
                         id: Date.now() + Math.random(),
-                        name: itemMatch[1].trim(),
+                        name: itemMatch[1].trim().replace(/\s+/g, ' '),
                         price: parseInt(itemMatch[2]),
                         comment: ''
                     });
                 }
                 
-                // 匹配总价（示例：合 計    ¥2,896）
+                // 增强总价匹配（处理逗号分隔）
                 if (line.includes('合計')) {
-                    const totalMatch = line.match(/¥([\d,]+)/);
-                    if (totalMatch) receipt.total = parseInt(totalMatch[1].replace(/,/g, ''));
+                    const totalMatch = line.match(/¥\s*([\d,]+)/);
+                    if (totalMatch) {
+                        receipt.total = parseInt(totalMatch[1].replace(/,/g, ''));
+                    }
                 }
             });
 
             return receipt;
         }
 
-        // 渲染商品列表
+        // 修复5: 优化渲染性能
         function renderItems(filter = '') {
+            if (isRendering) return;
+            isRendering = true;
+            
             const list = document.getElementById('itemList');
             list.innerHTML = '';
             
-            receipts.forEach(receipt => {
-                receipt.items.filter(item => 
-                    item.name.includes(filter) || 
-                    item.comment.includes(filter)
-                ).forEach(item => {
-                    const template = document.getElementById('detailTemplate').innerHTML;
-                    const html = template
-                        .replace(/{{name}}/g, item.name)
-                        .replace(/{{price}}/g, item.price)
-                        .replace(/{{comment}}/g, item.comment)
-                        .replace(/{{id}}/g, item.id);
-                    
-                    const div = document.createElement('div');
-                    div.innerHTML = html;
-                    list.appendChild(div.firstElementChild);
-                });
+            const filteredItems = receipts.flatMap(r => r.items)
+                .filter(item => 
+                    item.name.toLowerCase().includes(filter.toLowerCase()) || 
+                    item.comment.toLowerCase().includes(filter.toLowerCase())
+                );
+
+            const fragment = document.createDocumentFragment();
+            filteredItems.forEach(item => {
+                const template = document.getElementById('detailTemplate').innerHTML;
+                const html = template
+                    .replace(/{{name}}/g, item.name)
+                    .replace(/{{price}}/g, item.price)
+                    .replace(/{{comment}}/g, item.comment)
+                    .replace(/{{id}}/g, item.id);
+                
+                const div = document.createElement('div');
+                div.innerHTML = html;
+                fragment.appendChild(div.firstElementChild);
             });
+            
+            list.appendChild(fragment);
+            isRendering = false;
         }
 
-        // 保存评价
+        // 其他函数保持不变（需添加错误处理）
         function saveComment(itemId, comment) {
             receipts.forEach(receipt => {
                 const item = receipt.items.find(i => i.id === itemId);
                 if (item) item.comment = comment.substring(0, 30);
             });
             saveData();
+            renderItems(); // 修复6: 保存后强制刷新
         }
 
-        // 搜索功能
         function searchItems(keyword) {
             renderItems(keyword);
         }
 
-        // 数据持久化
         function saveData() {
-            localStorage.setItem('receipts', JSON.stringify(receipts));
+            try {
+                localStorage.setItem('receipts', JSON.stringify(receipts));
+            } catch (error) {
+                console.error('存储失败:', error);
+                alert('本地存储空间已满，请清理后重试');
+            }
         }
 
-        // 初始化加载
+        // 初始化渲染
         renderItems();
     </script>
 </body>
