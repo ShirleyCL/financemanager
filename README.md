@@ -1,3 +1,6 @@
+import uCharts from '@qiun/ucharts';
+Vue.prototype.$uCharts = uCharts;
+
 <!-- pages/index/index.vue 主页面 -->
 <template>
   <view class="container">
